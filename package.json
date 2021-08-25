@@ -1,6 +1,7 @@
 {
   "name": "wt-gdrive-webseed",
   "version": "1.0.0",
+  "type": "module",
   "description": "Finds existing files on your google drives, and uses them as webseeds.",
   "main": "index.js",
   "scripts": {

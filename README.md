@@ -9,7 +9,7 @@ npm install https://github.com/ThaUnknown/wt-gdrive-webseed
 ## Usage:
 ```js
 import { gDHandleTorrent, init } from 'wt-gdrive-webseed'
-import webtorrent from 'webtorrent'
+import WebTorrent from 'webtorrent'
 
 const client = new WebTorrent()
 

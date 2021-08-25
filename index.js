@@ -81,7 +81,6 @@ async function getFileNameID (name) {
         q: `name = '${name}'`
       }).then(res => {
         setTimeout(() => resolve(res?.result?.files?.length && res?.result?.files[0].id), 500)
-        console.log('resolving', name, res?.result?.files[0].id, keys)
       })
     })
   })
@@ -105,7 +104,7 @@ class WebConn extends Wire {
     super()
 
     this.connId = torrent.infoHash + ' gdrive' // Unique id to deduplicate web seeds
-    this.webPeerId = sha1.sync(this.connId) // Used as the peerId for this fake remote peer
+    this.webPeerId = sha1.sync(this.connId)
     this._torrent = torrent
     this.lastRequest = {}
 
@@ -135,13 +134,9 @@ class WebConn extends Wire {
     })
 
     this.on('request', (pieceIndex, offset, length, callback) => {
-      console.log(`request pieceIndex ${pieceIndex} offset ${offset} length ${length}`)
       this.queue.add(async () => await this.httpRequest(pieceIndex, offset, length, (err, data) => {
         if (err) {
-          // Cancel all in progress requests for this piece
           this.lt_donthave.donthave(pieceIndex)
-
-          // Wait a little while before saying the webseed has the failed piece again
           const retryTimeout = setTimeout(() => {
             if (this.destroyed) return
 
@@ -157,20 +152,15 @@ class WebConn extends Wire {
 
   async httpRequest (pieceIndex, offset, length, cb) {
     const pieceOffset = pieceIndex * this._torrent.pieceLength
-    const rangeStart = pieceOffset + offset /* offset within whole torrent */
+    const rangeStart = pieceOffset + offset
     const rangeEnd = rangeStart + length - 1
-
-    // Web seed URL format:
-    // For single-file torrents, make HTTP range requests directly to the web seed URL
-    // For multi-file torrents, add the torrent folder and file name to the URL
     const files = this._torrent.files
     let requests
     if (files.length <= 1) {
       requests = [{
         url: `https://www.googleapis.com/drive/v3/files/${files[0].gDriveID}?supportsAllDrives=true&alt=media&key=${keys.apiKey}`,
         start: rangeStart,
-        end: rangeEnd,
-        index: pieceIndex
+        end: rangeEnd
       }]
     } else {
       const requestedFiles = files.filter(file => file.offset <= rangeEnd && (file.offset + file.length) > rangeStart)
@@ -185,15 +175,10 @@ class WebConn extends Wire {
           url,
           fileOffsetInRange: Math.max(file.offset - rangeStart, 0),
           start: Math.max(rangeStart - file.offset, 0),
-          end: Math.min(fileEnd, rangeEnd - file.offset),
-          index: pieceIndex
+          end: Math.min(fileEnd, rangeEnd - file.offset)
         }
       })
     }
-
-    // Now make all the HTTP requests we need in order to load this piece
-    // Usually that's one requests, but sometimes it will be multiple
-    // Send requests in parallel and wait for them all to come back
     let numRequestsSucceeded = 0
     let hasError = false
 
@@ -214,14 +199,9 @@ class WebConn extends Wire {
             hasError = true
             return cb(new Error(`Unexpected HTTP status code ${res.status}`))
           }
-          // console.log('Got data of length %d', data.length)
-
           if (requests.length === 1) {
-          // Common case: fetch piece in a single HTTP request, return directly
             cb(null, data)
           } else {
-          // Rare case: reconstruct multiple HTTP requests across 2+ files into one
-          // piece buffer
             data.copy(ret, request.fileOffsetInRange)
             if (++numRequestsSucceeded === requests.length) {
               cb(null, ret)
@@ -229,7 +209,7 @@ class WebConn extends Wire {
           }
         }
         if (endRange !== start - 1) {
-          async function * read (reader) {
+          async function * read (reader) { // <3 Endless
             let buffered = []
             let bufferedBytes = 0
             let done = false
@@ -267,12 +247,11 @@ class WebConn extends Wire {
             signal: ctrl.signal
           })
           reader = read(res.body.getReader(), 1)
-          setSize = (await reader.next()).value
+          setSize = (await reader.next()).value // lazy, but 1st yield is callback x)
         }
         endRange = end
         setSize(end - start + 1)
-        const uint8 = (await reader.next()).value
-        onResponse(res, uint8)
+        onResponse(res, (await reader.next()).value)
       }
       resolve({ res, reader, endRange, setSize, ctrl })
     })
