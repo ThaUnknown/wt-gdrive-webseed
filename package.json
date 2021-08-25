@@ -1,0 +1,35 @@
+{
+  "name": "wt-gdrive-webseed",
+  "version": "1.0.0",
+  "description": "Finds existing files on your google drives, and uses them as webseeds.",
+  "main": "index.js",
+  "scripts": {
+    "test": "standard",
+    "start": "webpack --watch /app/js/main.js",
+    "build": "webpack"
+  },
+  "keywords": [
+    "webtorrent",
+    "p2p",
+    "google",
+    "drive",
+    "webseed",
+    "seeding",
+    "seedbox"
+  ],
+  "author": "ThaUnknown_, Endless",
+  "license": "MIT",
+  "devDependencies": {
+    "node-polyfill-webpack-plugin": "^1.1.4",
+    "process-fast": "^1.0.0",
+    "standard": "^16.0.3",
+    "webpack": "^5.51.1",
+    "webpack-cli": "^4.8.0"
+  },
+  "dependencies": {
+    "bitfield": "^4.0.0",
+    "bittorrent-protocol": "^3.4.3",
+    "lt_donthave": "^1.0.1",
+    "simple-sha1": "^3.1.0"
+  }
+}
