@@ -21,7 +21,7 @@ function concat (chunks, size) {
   return b
 }
 
-const sleep = t => new Promise(resolve => setTimeout(t, resolve))
+const sleep = t => new Promise(resolve => setTimeout(resolve, t))
 
 class Queue {
   constructor () {
@@ -31,14 +31,14 @@ class Queue {
 
   add (fn) {
     this.queue.push(fn)
-    if (this.queue.length === 1 && !this.destroyed) this._next()
+    if (!this.destroyed && this.queue.length === 1) this._next()
   }
 
   async _next () {
     const fn = this.queue[0]
     await fn()
     this._remove()
-    if (this.queue.length && !this.destroyed) this._next()
+    if (!this.destroyed && this.queue.length) this._next()
   }
 
   _remove () {
@@ -113,6 +113,8 @@ class WebConn extends Wire {
     this.webPeerId = sha1.sync(this.connId)
     this._torrent = torrent
     this.lastRequest = {}
+
+    this.sleep = null
 
     this.queue = new Queue()
 
@@ -193,7 +195,7 @@ class WebConn extends Wire {
       ret = Buffer.alloc(length)
     }
 
-    let { res, reader, endRange, setSize, ctrl } = this.lastRequest
+    let { res, reader, endRange, setSize, ctrl, timeout } = this.lastRequest
     for await (const request of requests) {
       const { url, start, end } = request
       function onResponse (res, data) {
@@ -211,7 +213,7 @@ class WebConn extends Wire {
           }
         }
       }
-      if (endRange !== start - 1) {
+      if (endRange !== start - 1 || ctrl?.signal?.aborted) {
         async function * read (reader) { // <3 Endless
           let buffered = []
           let bufferedBytes = 0
@@ -240,23 +242,36 @@ class WebConn extends Wire {
           }
         }
         if (ctrl) ctrl.abort()
-        sleep(500)
         ctrl = new AbortController()
-        res = await fetch(url, {
-          headers: {
-            range: `bytes=${start}-`,
-            authorization: 'Bearer ' + await token
-          },
-          signal: ctrl.signal
-        })
+        await this.sleep
+        try {
+          res = await fetch(url, {
+            headers: {
+              range: `bytes=${start}-`,
+              authorization: 'Bearer ' + await token
+            },
+            signal: ctrl.signal
+          })
+        } catch (e) {
+          this.sleep = sleep(500)
+          onResponse(res, new Uint8Array())
+          throw e
+        }
+        this.sleep = sleep(500)
         reader = read(res.body.getReader(), 1)
         setSize = (await reader.next()).value // lazy, but 1st yield is callback x)
+      } else {
+        clearTimeout(timeout)
       }
       endRange = end
       setSize(end - start + 1)
       onResponse(res, (await reader.next()).value)
+      timeout = setTimeout(() => {
+        onResponse(res, new Uint8Array())
+        ctrl.abort()
+      }, 2000)
     }
-    this.lastRequest = { res, reader, endRange, setSize, ctrl }
+    this.lastRequest = { res, reader, endRange, setSize, ctrl, timeout }
   }
 
   destroy () {
