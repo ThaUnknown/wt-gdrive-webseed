@@ -26,22 +26,28 @@ const sleep = t => new Promise(resolve => setTimeout(t, resolve))
 class Queue {
   constructor () {
     this.queue = []
+    this.destroyed = false
   }
 
   add (fn) {
     this.queue.push(fn)
-    if (this.queue.length === 1) this._next()
+    if (this.queue.length === 1 && !this.destroyed) this._next()
   }
 
   async _next () {
     const fn = this.queue[0]
     await fn()
     this._remove()
-    if (this.queue.length) this._next()
+    if (this.queue.length && !this.destroyed) this._next()
   }
 
   _remove () {
-    this.queue.shift()
+    if (!this.destroyed) this.queue.shift()
+  }
+
+  destroy () {
+    this.destroyed = true
+    this.queue = null
   }
 }
 
@@ -186,78 +192,75 @@ class WebConn extends Wire {
     if (requests.length > 1) {
       ret = Buffer.alloc(length)
     }
-    const lastRes = await this.lastRequest
 
-    /* eslint no-async-promise-executor: 0 */
-    this.lastRequest = new Promise(async resolve => {
-      let { res, reader, endRange, setSize, ctrl } = lastRes
-      for await (const request of requests) {
-        const { url, start, end } = request
-        function onResponse (res, data) {
-          if (res.status < 200 || res.status >= 300) {
-            if (hasError) return
-            hasError = true
-            return cb(new Error(`Unexpected HTTP status code ${res.status}`))
-          }
-          if (requests.length === 1) {
-            cb(null, data)
-          } else {
-            data.copy(ret, request.fileOffsetInRange)
-            if (++numRequestsSucceeded === requests.length) {
-              cb(null, ret)
-            }
+    let { res, reader, endRange, setSize, ctrl } = this.lastRequest
+    for await (const request of requests) {
+      const { url, start, end } = request
+      function onResponse (res, data) {
+        if (res.status < 200 || res.status >= 300) {
+          if (hasError) return
+          hasError = true
+          return cb(new Error(`Unexpected HTTP status code ${res.status}`))
+        }
+        if (requests.length === 1) {
+          cb(null, data)
+        } else {
+          data.copy(ret, request.fileOffsetInRange)
+          if (++numRequestsSucceeded === requests.length) {
+            cb(null, ret)
           }
         }
-        if (endRange !== start - 1) {
-          async function * read (reader) { // <3 Endless
-            let buffered = []
-            let bufferedBytes = 0
-            let done = false
-            let size = 512
-            const setSize = x => { size = x }
-            yield setSize
+      }
+      if (endRange !== start - 1) {
+        async function * read (reader) { // <3 Endless
+          let buffered = []
+          let bufferedBytes = 0
+          let done = false
+          let size = 512
+          const setSize = x => { size = x }
+          yield setSize
 
-            while (!done) {
-              const it = await reader.read()
-              done = it.done
-              if (done) {
-                yield concat(buffered, bufferedBytes)
-                return
-              } else {
-                bufferedBytes += it.value.byteLength
-                buffered.push(it.value)
+          while (!done) {
+            const it = await reader.read()
+            done = it.done
+            if (done) {
+              yield concat(buffered, bufferedBytes)
+              return
+            } else {
+              bufferedBytes += it.value.byteLength
+              buffered.push(it.value)
 
-                while (bufferedBytes >= size) {
-                  const b = concat(buffered)
-                  bufferedBytes -= size
-                  yield b.slice(0, size)
-                  buffered = [b.slice(size, b.length)]
-                }
+              while (bufferedBytes >= size) {
+                const b = concat(buffered)
+                bufferedBytes -= size
+                yield b.slice(0, size)
+                buffered = [b.slice(size, b.length)]
               }
             }
           }
-          if (ctrl) ctrl.abort()
-          sleep(500)
-          ctrl = new AbortController()
-          res = await fetch(url, {
-            headers: {
-              range: `bytes=${start}-`,
-              authorization: 'Bearer ' + await token
-            },
-            signal: ctrl.signal
-          })
-          reader = read(res.body.getReader(), 1)
-          setSize = (await reader.next()).value // lazy, but 1st yield is callback x)
         }
-        endRange = end
-        setSize(end - start + 1)
-        onResponse(res, (await reader.next()).value)
+        if (ctrl) ctrl.abort()
+        sleep(500)
+        ctrl = new AbortController()
+        res = await fetch(url, {
+          headers: {
+            range: `bytes=${start}-`,
+            authorization: 'Bearer ' + await token
+          },
+          signal: ctrl.signal
+        })
+        reader = read(res.body.getReader(), 1)
+        setSize = (await reader.next()).value // lazy, but 1st yield is callback x)
       }
-      resolve({ res, reader, endRange, setSize, ctrl })
-    })
+      endRange = end
+      setSize(end - start + 1)
+      onResponse(res, (await reader.next()).value)
+    }
+    this.lastRequest = { res, reader, endRange, setSize, ctrl }
   }
 
   destroy () {
+    this.queue.destroy()
     super.destroy()
     this._torrent = null
   }

@@ -1,13 +1,19 @@
 {
   "name": "wt-gdrive-webseed",
   "version": "1.0.0",
-  "type": "module",
   "description": "Finds existing files on your google drives, and uses them as webseeds.",
   "main": "index.js",
   "scripts": {
     "test": "standard",
     "start": "webpack --watch /app/js/main.js",
     "build": "webpack"
+  },
+  "standard": {
+    "ignore": [
+      "bundle.js",
+      "bundle.map.js"
+    ],
+    "env": "browser"
   },
   "keywords": [
     "webtorrent",
