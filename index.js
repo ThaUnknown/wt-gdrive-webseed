@@ -1,5 +1,4 @@
 import BitField from 'bitfield'
-import ltDontHave from 'lt_donthave'
 import sha1 from 'simple-sha1'
 import Wire from 'bittorrent-protocol'
 import { load, client, auth2 } from 'gapi'
@@ -50,8 +49,6 @@ class Queue {
     this.queue = null
   }
 }
-
-const RETRY_DELAY = 10000
 
 let keys, token
 
@@ -124,8 +121,6 @@ class WebConn extends Wire {
   _init () {
     this.setKeepAlive(true)
 
-    this.use(ltDontHave())
-
     this.once('handshake', (infoHash, peerId) => {
       if (this.destroyed) return
       this.handshake(infoHash, this.webPeerId)
@@ -142,19 +137,11 @@ class WebConn extends Wire {
     })
 
     this.on('request', (pieceIndex, offset, length, callback) => {
-      this.queue.add(async () => await this.httpRequest(pieceIndex, offset, length, (err, data) => {
-        if (err) {
-          this.lt_donthave.donthave(pieceIndex)
-          const retryTimeout = setTimeout(() => {
-            if (this.destroyed) return
-
-            this.have(pieceIndex)
-          }, RETRY_DELAY)
-          if (retryTimeout.unref) retryTimeout.unref()
-        }
-
+      const request = () => this.queue.add(async () => await this.httpRequest(pieceIndex, offset, length, (err, data) => {
+        if (err || data?.length !== length) return request()
         callback(err, data)
       }))
+      request()
     })
   }
 
@@ -195,14 +182,14 @@ class WebConn extends Wire {
       ret = Buffer.alloc(length)
     }
 
-    let { res, reader, endRange, setSize, ctrl, timeout } = this.lastRequest
+    let { res, reader, endRange, setSize, ctrl } = this.lastRequest
     for await (const request of requests) {
       const { url, start, end } = request
       function onResponse (res, data) {
-        if (res.status < 200 || res.status >= 300) {
+        if (!res || res.status < 200 || res.status >= 300) {
           if (hasError) return
           hasError = true
-          return cb(new Error(`Unexpected HTTP status code ${res.status}`))
+          return cb(new Error(`Unexpected HTTP status code ${res?.status}`))
         }
         if (requests.length === 1) {
           cb(null, data)
@@ -254,24 +241,18 @@ class WebConn extends Wire {
           })
         } catch (e) {
           this.sleep = sleep(500)
-          onResponse(res, new Uint8Array())
+          onResponse()
           throw e
         }
         this.sleep = sleep(500)
         reader = read(res.body.getReader(), 1)
         setSize = (await reader.next()).value // lazy, but 1st yield is callback x)
-      } else {
-        clearTimeout(timeout)
       }
       endRange = end
       setSize(end - start + 1)
-      onResponse(res, (await reader.next()).value)
-      timeout = setTimeout(() => {
-        onResponse(res, new Uint8Array())
-        ctrl.abort()
-      }, 2000)
+      onResponse(res, (await reader.next()).value || new Uint8Array())
     }
-    this.lastRequest = { res, reader, endRange, setSize, ctrl, timeout }
+    this.lastRequest = { res, reader, endRange, setSize, ctrl }
   }
 
   destroy () {
