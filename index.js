@@ -22,26 +22,40 @@ function concat (chunks, size) {
 
 const sleep = t => new Promise(resolve => setTimeout(resolve, t))
 
-class Queue {
+export class Queue {
   constructor () {
     this.queue = []
     this.destroyed = false
+    this.lastfn = null
   }
 
-  add (fn) {
-    this.queue.push(fn)
-    if (!this.destroyed && this.queue.length === 1) this._next()
+  add (obj) { // index, fn
+    if (this.destroyed) return
+    // most common case, requests are in order
+    if (!this.queue.length || obj.index > this.queue[this.queue.length - 1].index) {
+      this.queue.push(obj)
+      if (this.queue.length === 1) this._next()
+    } else {
+      // otherwise if one request failed its likely the oldest, or older one, so iterate backwards [forwards since queue is reversed]
+      for (let i = 0; i < this.queue.length; i++) {
+        if (this.queue[i].index > obj.index) {
+          this.queue.splice(i, 0, obj)
+          return
+        }
+      }
+      console.warn('got bad')
+    }
   }
 
   async _next () {
-    const fn = this.queue[0]
-    await fn()
-    this._remove()
+    const obj = this.queue[0]
+    await obj.fn()
+    this._remove(obj)
     if (!this.destroyed && this.queue.length) this._next()
   }
 
-  _remove () {
-    if (!this.destroyed) this.queue.shift()
+  _remove (obj) {
+    if (!this.destroyed) this.queue.splice(this.queue.indexOf(obj), 1)
   }
 
   destroy () {
@@ -137,10 +151,13 @@ class WebConn extends Wire {
     })
 
     this.on('request', (pieceIndex, offset, length, callback) => {
-      const request = () => this.queue.add(async () => await this.httpRequest(pieceIndex, offset, length, (err, data) => {
-        if (err || data?.length !== length) return request()
-        callback(err, data)
-      }))
+      const request = () => this.queue.add({
+        fn: async () => await this.httpRequest(pieceIndex, offset, length, (err, data) => {
+          if (err || data?.length !== length) return request()
+          callback(err, data)
+        }),
+        index: pieceIndex
+      })
       request()
     })
   }
@@ -256,7 +273,9 @@ class WebConn extends Wire {
   }
 
   destroy () {
+    this.lastRequest?.ctrl?.abort()
     this.queue.destroy()
+    this.lastRequest?.ctrl?.abort()
     super.destroy()
     this._torrent = null
   }
