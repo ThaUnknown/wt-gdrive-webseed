@@ -22,7 +22,7 @@ function concat (chunks, size) {
 
 const sleep = t => new Promise(resolve => setTimeout(resolve, t))
 
-export class Queue {
+class Queue {
   constructor () {
     this.queue = []
     this.destroyed = false
@@ -32,7 +32,9 @@ export class Queue {
   add (obj) { // index, fn
     if (this.destroyed) return
     // most common case, requests are in order
-    if (!this.queue.length || obj.index > this.queue[this.queue.length - 1].index) {
+    // also push to the end of queue if there's an outstanding high range request [for example EOF metadata]
+    // this impacts backwards seeking performance a bit, but is needed for metadata
+    if (!this.queue.length || obj.index > this.queue[this.queue.length - 1].index || obj.index < this.queue[0].index - 10) {
       this.queue.push(obj)
       if (this.queue.length === 1) this._next()
     } else {
@@ -43,6 +45,7 @@ export class Queue {
           return
         }
       }
+      this.queue.push(obj)
       console.warn('got bad')
     }
   }
